@@ -245,6 +245,12 @@
        so labels stay on one line instead of wrapping tall */
     .btn{font-size:12px;padding:12px 20px}
     .share-actions{grid-template-columns:1fr}
+    /* full-width start button */
+    .btn-row.cta{display:block}
+    .btn-row.cta .btn.primary{display:flex;width:100%}
+    /* stack the guarantee vertically */
+    .zero{display:flex;flex-direction:column;gap:6px;line-height:1.6}
+    .zero .dot{display:none}
   }
 </style>
 </head>
@@ -259,7 +265,7 @@
     <div class="btn-row cta">
       <button class="btn primary" id="startBtn">Start</button>
     </div>
-    <p class="zero">Zero backend · zero stored · open source</p>
+    <p class="zero"><span>Zero backend</span><span class="dot"> · </span><span>zero stored</span><span class="dot"> · </span><span>open source</span></p>
     <a class="made-by" href="https://stefan.chat/" target="_blank" rel="noopener">made by stefan.chat<span class="mb-caret" aria-hidden="true"></span></a>
   </section>
 
