@@ -676,7 +676,7 @@
   });
   $("#emailBtn").addEventListener("click",()=>{
     // opens the mail client with the message, then the proof link
-    const body=encodeURIComponent(shareText+"\n\nWritten Not by a Bot\n"+shareUrl);
+    const body=encodeURIComponent(shareText+"\n\n\nWritten Not by a Bot\n"+shareUrl);
     const subject=encodeURIComponent("A message I wrote");
     window.location.href=`mailto:?subject=${subject}&body=${body}`;
   });
