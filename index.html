@@ -241,6 +241,7 @@
   .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
     background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:12px;
     letter-spacing:.06em;padding:11px 18px;border-radius:999px;opacity:0;
+    white-space:nowrap;text-align:center;max-width:calc(100vw - 24px);
     pointer-events:none;transition:opacity .2s,transform .2s}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
@@ -340,7 +341,7 @@
 
     <div class="share-actions">
       <button class="btn blue" id="copyBtn">Copy link</button>
-      <button class="btn ghost" id="copyMsgBtn">Copy message with link</button>
+      <button class="btn ghost" id="emailBtn">Email</button>
     </div>
   </section>
 
@@ -673,23 +674,11 @@
       t.select();try{document.execCommand("copy");toast("Link copied");}catch{toast("Copy failed");}
       document.body.removeChild(t);}
   });
-  $("#copyMsgBtn").addEventListener("click",async()=>{
-    // the message itself, with the proof link underneath
-    const plain=shareText+"\n\nWritten Not by a Bot\n"+shareUrl;
-    const html=escapeHtml(shareText).replace(/\n/g,"<br>")+
-      '<br><br><a href="'+shareUrl+'">Written Not by a Bot</a>';
-    try{
-      await navigator.clipboard.write([new ClipboardItem({
-        "text/plain":new Blob([plain],{type:"text/plain"}),
-        "text/html":new Blob([html],{type:"text/html"})
-      })]);
-      toast("Message + link copied");
-    }catch{
-      try{await navigator.clipboard.writeText(plain);toast("Message + link copied");}
-      catch{const t=document.createElement("textarea");t.value=plain;document.body.appendChild(t);
-        t.select();try{document.execCommand("copy");toast("Copied");}catch{toast("Copy failed");}
-        document.body.removeChild(t);}
-    }
+  $("#emailBtn").addEventListener("click",()=>{
+    // opens the mail client with the message, then the proof link
+    const body=encodeURIComponent(shareText+"\n\nWritten Not by a Bot\n"+shareUrl);
+    const subject=encodeURIComponent("A message I wrote");
+    window.location.href=`mailto:?subject=${subject}&body=${body}`;
   });
   // playback speed — the sender's choice is baked into the share link
   document.querySelectorAll("#speeds button").forEach(b=>{
@@ -707,7 +696,7 @@
     clearInterval(clockTimer);
     $("#editorCard").classList.remove("recording");
     const snapshot=ops.slice();
-    $("#copyBtn").style.display="";$("#copyMsgBtn").style.display="";
+    $("#copyBtn").style.display="";$("#emailBtn").style.display="";
     renderReport(buildReport(snapshot));
     loadReplay(snapshot);
     await prepareShare(snapshot);
@@ -754,7 +743,7 @@
         const opList=dec.ops;
         isRecipient=true;
         setSpeedUI(dec.s||1);
-        $("#copyBtn").style.display="none";$("#copyMsgBtn").style.display="none";
+        $("#copyBtn").style.display="none";$("#emailBtn").style.display="none";
         renderReport(buildReport(opList));
         loadReplay(opList,false);
         $("#proofModal").hidden=false;
