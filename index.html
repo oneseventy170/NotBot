@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>NotBot</title>
+<link rel="icon" type="image/svg+xml" href="notbotFav.svg">
+<!--
+  NotBot — an open-source writing-provenance sandbox.
+
+  How it works: while you type, every edit is recorded as a tiny diff
+  ({time, position, chars deleted, chars inserted, was-it-a-paste}). On save,
+  that operation log is gzip-compressed and packed into a share link. Anyone
+  who opens the link watches your message get written back keystroke by
+  keystroke — false starts, deletions, and pasted blocks all visible.
+
+  Honest limitation: this is client-side proof. It's persuasive (a person can
+  watch the writing happen) but it is NOT tamper-proof — a determined faker
+  could hand-edit the payload, or type out AI text from a second screen. A
+  hardened version would sign and timestamp the event stream server-side at
+  capture time. This v1 trades that for being fully static and backend-free.
+
+  MIT-licensed. No tracking, no network calls, no dependencies beyond webfonts.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=Caveat:wght@500;600&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#E8E4D8;        /* warm manila ground */
+    --paper-2:#F2EFE6;      /* raised surface */
+    --ink:#211C16;          /* sumi near-black */
+    --ink-soft:#5A5247;     /* secondary text */
+    --ink-faint:#8C8475;
+    --accent:#4A6C50;       /* moss green = a human typing */
+    --accent-tick:rgba(74,108,80,.45);
+    --cta:#2A45C0;          /* fountain-pen blue = primary actions */
+    --amber:#B96E12;        /* ochre = pasted-in */
+    --amber-soft:rgba(185,110,18,.16);
+    --line:rgba(33,28,22,.16);
+    --line-soft:rgba(33,28,22,.08);
+    --radius:14px;
+    --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    --serif:"Instrument Serif",Georgia,serif;
+    --hand:"Caveat","Bradley Hand",cursive;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--paper);color:var(--ink);
+    font-family:var(--serif);
+    -webkit-font-smoothing:antialiased;
+    line-height:1.5;
+    padding:max(20px,env(safe-area-inset-top)) 20px max(20px,env(safe-area-inset-bottom));
+    display:flex;align-items:flex-start;justify-content:center;
+  }
+  /* paper grain — the ground should feel like stock, not a hex code */
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.055'/%3E%3C/svg%3E")}
+  .wrap{width:100%;max-width:620px;margin:auto}
+
+  /* type roles — serif is the human voice, mono is the machine's annotation */
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--ink-faint);margin:0 0 40px;
+    display:flex;justify-content:space-between;gap:12px}
+  .eyebrow .dim{color:var(--ink-faint);opacity:.75}
+  /* landing title strip — scribbled, not typeset */
+  #v-intro .eyebrow{font-family:var(--hand);font-size:20px;font-weight:600;
+    letter-spacing:.02em;text-transform:none;color:var(--ink-soft)}
+  #v-intro .eyebrow span:first-child{transform:rotate(-2deg)}
+  #v-intro .eyebrow .dim{font-family:var(--mono);font-size:15px;font-weight:400;
+    letter-spacing:.18em;text-transform:uppercase;align-self:center}
+  h1{font-family:var(--serif);font-weight:400;font-size:clamp(42px,10.5vw,68px);
+    line-height:.98;letter-spacing:-.005em;margin:0 0 40px;text-align:center}
+  h1 em{font-style:italic;color:var(--accent);position:relative;white-space:nowrap}
+  h1 em svg{position:absolute;left:-3%;bottom:.1em;width:106%;height:.18em;overflow:visible}
+  h1 em path{fill:var(--accent);stroke:none;opacity:.5}
+  .lede{font-family:var(--hand);font-size:28px;font-weight:500;color:var(--ink-soft);
+    margin:0 auto 40px;max-width:44ch;line-height:1.4;text-align:center;
+    transform:rotate(-1.2deg)}
+  .zero{font-family:var(--mono);font-size:12.5px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--accent);margin:0;text-align:center}
+
+  /* maker's mark — logo style, pinned 24px off the bottom, ink-soft fill */
+  .made-by{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+    display:flex;justify-content:center;align-items:center;
+    font-family:"JetBrains Mono",var(--mono);font-size:14px;
+    font-weight:700;color:var(--ink-soft);text-decoration:none;letter-spacing:.02em}
+  .made-by .mb-caret{display:inline-block;width:8px;height:15px;
+    background:var(--ink-soft);margin-left:3px;
+    animation:blink 1.1s steps(1) infinite}
+
+  /* pen marginalia — the human layer */
+  .margin-note{font-family:var(--serif);font-style:italic;font-size:17.5px;
+    color:var(--accent);display:inline-block;transform:rotate(-1.6deg);line-height:1.3}
+  .margin-note.center{display:block;text-align:center;margin-top:28px;
+    transform:rotate(-1.1deg)}
+
+  /* buttons */
+  button{font-family:var(--mono);cursor:pointer;border:none;
+    -webkit-tap-highlight-color:transparent}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;
+    background:var(--ink);color:var(--paper);font-size:13px;letter-spacing:.08em;
+    text-transform:uppercase;padding:14px 26px;border-radius:999px;
+    transition:transform .12s ease,opacity .12s ease}
+  .btn:hover{transform:translateY(-1px)}
+  .btn:active{transform:translateY(0)}
+  .btn:disabled{opacity:.4;cursor:default;transform:none}
+  .btn.ghost{background:transparent;color:var(--ink);
+    box-shadow:inset 0 0 0 1px var(--line)}
+  .btn.blue{background:var(--cta);color:#fff}
+  /* CTAs press inward on hover rather than lifting */
+  .btn.blue:hover,.btn.primary:hover,.btn.ghost:hover{transform:scale(.96)}
+  .btn.blue:active,.btn.primary:active,.btn.ghost:active{transform:scale(.93)}
+  .btn.primary{background:var(--cta);color:#fff;
+    box-shadow:0 18px 36px -18px rgba(42,69,192,.6)}
+  .btn-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .btn-row.cta{margin:0 0 40px;gap:18px;justify-content:center}
+  .arrow{font-family:var(--mono)}
+
+  /* the recorder surface */
+  .editor-card{background:var(--paper-2);border:1px solid var(--line);
+    border-radius:var(--radius);overflow:hidden;
+    box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 14px 40px -28px rgba(33,28,22,.5)}
+  .editor-head{display:flex;align-items:center;justify-content:space-between;
+    padding:13px 16px;border-bottom:1px solid var(--line-soft)}
+  .rec{display:flex;align-items:center;gap:9px;font-family:var(--mono);
+    font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint)}
+  .rec .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 0 0 var(--accent-tick)}
+  .recording .rec .dot{animation:pulse 1.7s ease-out infinite}
+  .recording .rec{color:var(--accent)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 var(--accent-tick)}
+    70%{box-shadow:0 0 0 8px rgba(74,108,80,0)}100%{box-shadow:0 0 0 0 rgba(74,108,80,0)}}
+  .clock{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-faint)}
+
+  textarea{width:100%;min-height:230px;resize:vertical;border:none;outline:none;
+    background:transparent;color:var(--ink);font-family:var(--mono);font-size:16px;
+    line-height:1.65;padding:20px 18px;display:block}
+  textarea::placeholder{color:var(--ink-faint)}
+
+  /* signature element: the keystroke pulse / scrubber */
+  .pulse-wrap{border-top:1px solid var(--line-soft);background:var(--paper);
+    padding:10px 14px 12px}
+  .pulse-meta{display:flex;justify-content:space-between;align-items:center;
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--ink-faint);margin-bottom:7px}
+  canvas.pulse{width:100%;height:46px;display:block;border-radius:6px;
+    background:linear-gradient(var(--paper-2),var(--paper-2));cursor:pointer;
+    touch-action:none}
+  .legend{display:flex;gap:16px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .swatch{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .swatch.b{background:var(--accent)}.swatch.a{background:var(--amber)}
+
+  .editor-foot{display:flex;gap:12px;padding:14px 16px;border-top:1px solid var(--line-soft);
+    align-items:center}
+  .spacer{flex:1}
+
+  /* replay reading surface */
+  .read{font-family:var(--mono);font-size:16px;line-height:1.65;white-space:pre-wrap;
+    word-break:break-word;padding:20px 18px;min-height:160px;color:var(--ink)}
+  .read .pasted{background:var(--amber-soft);
+    box-shadow:0 0 0 1px rgba(185,110,18,.28);border-radius:2px}
+  .caret{display:inline-block;width:.6ch;margin-left:-1px;color:var(--accent);
+    animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  /* replay timeline — autoplay progress, click to seek */
+  .playbar{display:flex;align-items:center;gap:12px;
+    padding:14px 16px 16px;border-top:1px solid var(--line-soft)}
+  .timeline{flex:1;height:10px;border-radius:999px;background:rgba(74,108,80,.16);
+    overflow:hidden;cursor:pointer}
+  .timeline-fill{height:100%;width:0%;background:var(--accent);border-radius:inherit;
+    transition-property:width;transition-timing-function:linear;transition-duration:0ms}
+  .speeds{display:flex;gap:3px}
+  .speeds button{font-family:var(--mono);font-size:11px;letter-spacing:.02em;
+    color:var(--ink-faint);background:transparent;padding:5px 8px;border-radius:999px}
+  .speeds button.on{background:var(--accent);color:#fff}
+
+  /* report */
+  .report{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+    background:var(--line-soft);border:1px solid var(--line);border-radius:var(--radius);
+    overflow:hidden;margin:18px 0 22px}
+  .stat{background:var(--paper-2);padding:10px 14px 12px}
+  .stat .k{font-family:var(--mono);font-size:10px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--ink-faint);margin:0 0 5px}
+  .stat .v{font-family:var(--serif);font-size:21px;line-height:1;font-weight:400;margin:0}
+  .stat .v small{font-size:12px;color:var(--ink-faint);font-family:var(--mono);
+    letter-spacing:.04em;margin-left:5px}
+
+  .share-head{margin:6px 2px 16px}
+  .share-head h2{font-family:var(--serif);font-weight:400;font-size:34px;margin:0 0 6px;
+    line-height:1.05}
+  .share-head p{color:var(--ink-soft);margin:0;font-size:17px}
+  /* saved artifact — visibly not an editor */
+  .locked .read{background:var(--paper);
+    box-shadow:0 1px 0 rgba(33,28,22,.06) inset}
+  .locked .editor-head{background:var(--paper-2)}
+  .locked .rec{color:var(--ink-faint)}
+
+  .share-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 14px}
+  .share-actions .btn{width:100%}
+
+  /* recipient proof — frameless: content sits straight on the darkened page */
+  .modal-back{position:fixed;inset:0;z-index:60;display:flex;align-items:center;
+    justify-content:center;background:rgba(26,22,17,.82);
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:20px}
+  .modal-back[hidden]{display:none}
+  .modal{max-width:470px;width:100%;text-align:center;
+    animation:rise .5s cubic-bezier(.2,.7,.2,1)}
+  .modal .eyebrow{font-family:var(--hand);font-size:20px;font-weight:600;
+    letter-spacing:.02em;text-transform:none;color:rgba(242,239,230,.75)}
+  .modal .eyebrow span:first-child{transform:rotate(-2deg)}
+  .modal .eyebrow .dim{color:rgba(242,239,230,.55);opacity:1;
+    font-family:var(--mono);font-size:15px;font-weight:400;
+    letter-spacing:.18em;text-transform:uppercase;align-self:center}
+  .modal-eyebrow{margin-bottom:48px}
+  .modal h2{font-family:var(--serif);font-weight:400;font-size:42px;line-height:1.05;
+    margin:0 0 48px;color:#F2EFE6}
+
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
+    background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:12px;
+    letter-spacing:.06em;padding:11px 18px;border-radius:999px;opacity:0;
+    pointer-events:none;transition:opacity .2s,transform .2s}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  .view{display:none}.view.active{display:block;animation:rise .42s cubic-bezier(.2,.7,.2,1)}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .foot-note{text-align:center;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);margin-top:34px}
+  .foot-note a{color:var(--ink-soft)}
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation-duration:.001ms!important;animation-iteration-count:1!important;
+      transition-duration:.001ms!important}
+  }
+  @media (max-width:480px){
+    .report{grid-template-columns:1fr 1fr}
+    /* tighter vertical rhythm on small screens */
+    .eyebrow{margin:0 0 24px}
+    h1{margin:0 0 24px}
+    .lede{font-size:22px;margin:0 auto 24px}
+    .btn-row.cta{margin:0 0 24px}
+    /* keep buttons compact: smaller padding, and stack the copy pair
+       so labels stay on one line instead of wrapping tall */
+    .btn{font-size:12px;padding:12px 20px}
+    .share-actions{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 1. ONBOARDING -->
+  <section id="v-intro" class="view active">
+    <p class="eyebrow"><span>NotBot</span><span class="dim">v1</span></p>
+    <h1>Proof a <em>human<svg viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><path d="M2 7 Q 26 2.2, 52 5.2 Q 78 8, 98 4.5 Q 78 10.4, 52 7.6 Q 26 4.8, 2 7 Z"/></svg></em> wrote&nbsp;it.</h1>
+    <p class="lede">Type your message, save, then send a link as proof.</p>
+    <div class="btn-row cta">
+      <button class="btn primary" id="startBtn">Start</button>
+    </div>
+    <p class="zero">Zero backend · zero stored · open source</p>
+    <a class="made-by" href="https://stefan.chat/" target="_blank" rel="noopener">made by stefan.chat<span class="mb-caret" aria-hidden="true"></span></a>
+  </section>
+
+  <!-- 2. WRITING -->
+  <section id="v-write" class="view">
+    <div class="editor-card recording" id="editorCard">
+      <div class="editor-head">
+        <span class="rec"><span class="dot"></span> Recording</span>
+        <span class="clock" id="clock">0:00</span>
+      </div>
+      <textarea id="ta" placeholder="Write your message…" spellcheck="true" autocomplete="off"></textarea>
+      <div class="pulse-wrap">
+        <div class="pulse-meta">
+          <span>Keystroke history</span>
+          <span class="legend"><span><i class="swatch b"></i>typed</span><span><i class="swatch a"></i>pasted</span></span>
+        </div>
+        <canvas class="pulse" id="livePulse"></canvas>
+      </div>
+      <div class="editor-foot">
+        <button class="btn ghost" id="restartBtn">Restart</button>
+        <span class="spacer"></span>
+        <button class="btn blue" id="saveBtn" disabled>Save</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. SAVED / SHARE -->
+  <section id="v-share" class="view">
+    <div class="editor-card locked">
+      <div class="editor-head">
+        <span class="rec" id="replayLabel">Saved · read-only</span>
+        <span class="clock" id="replayClock">0:00</span>
+      </div>
+      <div class="read" id="readArea"></div>
+      <div class="pulse-wrap">
+        <div class="pulse-meta">
+          <span>Scrub to seek</span>
+          <span class="legend"><span><i class="swatch b"></i>typed</span><span><i class="swatch a"></i>pasted</span></span>
+        </div>
+        <canvas class="pulse" id="replayPulse"></canvas>
+      </div>
+      <div class="playbar">
+        <div class="timeline" id="timeline" role="slider" aria-label="Replay position">
+          <div class="timeline-fill" id="timelineFill"></div>
+        </div>
+        <div class="speeds" id="speeds">
+          <button data-s="1" class="on">1×</button><button data-s="2">2×</button><button data-s="3">3×</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="report" id="report"></div>
+
+    <div class="share-actions">
+      <button class="btn blue" id="copyBtn">Copy link</button>
+      <button class="btn ghost" id="copyMsgBtn">Copy message with link</button>
+    </div>
+  </section>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- recipient-only: explains the proof before the replay rolls -->
+<div class="modal-back" id="proofModal" hidden>
+  <div class="modal">
+    <p class="eyebrow modal-eyebrow"><span>NotBot</span><span class="dim">v1</span></p>
+    <h2>The message you received,<br>this is its receipt.</h2>
+    <button class="btn primary" id="modalBtn">Watch it get written</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = s => document.querySelector(s);
+  const views = {intro:$("#v-intro"), write:$("#v-write"), share:$("#v-share")};
+  function show(name){
+    Object.values(views).forEach(v=>v.classList.remove("active"));
+    views[name].classList.add("active");
+    window.scrollTo({top:0,behavior:"instant"in window?"instant":"auto"});
+  }
+
+  // ---------- capture state ----------
+  let ops=[];            // {t, p, d, ins, paste}
+  let sessionStart=0;
+  let prevValue="";
+  let clockTimer=null;
+  let liveSpan=20000;    // live-history window; grows in 20s steps so marks stay put
+  const ta=$("#ta");
+  function drawLive(){
+    const t0=ops.length?ops[0].t:0;
+    drawPulse($("#livePulse"),ops,-1,t0+liveSpan);
+  }
+
+  function fmt(ms){const s=Math.round(ms/1000);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0");}
+
+  function diff(prev,next){
+    let p=0; const min=Math.min(prev.length,next.length);
+    while(p<min && prev.charCodeAt(p)===next.charCodeAt(p)) p++;
+    let s=0; const max=min-p;
+    while(s<max && prev.charCodeAt(prev.length-1-s)===next.charCodeAt(next.length-1-s)) s++;
+    return {p, d:prev.length-p-s, ins:next.slice(p,next.length-s)};
+  }
+
+  function beginSession(){
+    // sessionStart stays 0 until the first character — the clock starts with the writing
+    ops=[]; prevValue=""; ta.value=""; sessionStart=0;
+    $("#editorCard").classList.add("recording");
+    $("#saveBtn").disabled=true;
+    clearInterval(clockTimer);
+    liveSpan=20000;
+    $("#clock").textContent="0:00";
+    clockTimer=setInterval(()=>{
+      if(!sessionStart)return;
+      const el=performance.now()-sessionStart;
+      $("#clock").textContent=fmt(el);
+      const t0=ops.length?ops[0].t:0;
+      const span=Math.max(20000,Math.ceil((el-t0)/20000)*20000);
+      if(span!==liveSpan){liveSpan=span;drawLive();}
+    },250);
+    drawLive();
+    setTimeout(()=>ta.focus(),60);
+  }
+
+  ta.addEventListener("input",e=>{
+    if(!sessionStart)sessionStart=performance.now();
+    const next=ta.value;
+    const {p,d,ins}=diff(prevValue,next);
+    if(d===0 && ins==="") {prevValue=next;return;}
+    const paste=e.inputType==="insertFromPaste";
+    ops.push({t:Math.round(performance.now()-sessionStart),p,d,ins,paste});
+    prevValue=next;
+    $("#saveBtn").disabled=next.trim().length===0;
+    drawLive();
+  });
+
+  // ---------- pulse / scrubber rendering ----------
+  function reconstruct(opList,upto){
+    // returns {text, mask} after applying ops[0..upto] (upto inclusive; -1 => none, all if >=len)
+    let text="",mask=[];
+    const end=upto<0?-1:Math.min(upto,opList.length-1);
+    for(let i=0;i<=end;i++){
+      const o=opList[i];
+      const head=text.slice(0,o.p), tail=text.slice(o.p+o.d);
+      const hM=mask.slice(0,o.p), tM=mask.slice(o.p+o.d);
+      const iM=new Array(o.ins.length).fill(o.paste?1:0);
+      text=head+o.ins+tail; mask=hM.concat(iM,tM);
+    }
+    return {text,mask};
+  }
+
+  function drawPulse(canvas,opList,playIndex,endT){
+    const dpr=window.devicePixelRatio||1;
+    const w=canvas.clientWidth||canvas.parentElement.clientWidth, h=46;
+    canvas.width=w*dpr; canvas.height=h*dpr;
+    const ctx=canvas.getContext("2d"); ctx.scale(dpr,dpr);
+    ctx.clearRect(0,0,w,h);
+    const cs=getComputedStyle(document.documentElement);
+    const blue=cs.getPropertyValue("--accent").trim();
+    const blueTick=cs.getPropertyValue("--accent-tick").trim();
+    const amber=cs.getPropertyValue("--amber").trim();
+    // timeline is rebased to the first edit so the history starts at the left edge;
+    // during writing, endT (elapsed time) is the right edge so marks accrue left→right
+    const t0=opList.length?opList[0].t:0;
+    const tEnd=endT!==undefined?endT:(opList.length?opList[opList.length-1].t:0);
+    const total=Math.max(tEnd-t0,1);
+    const pad=3, usable=w-pad*2, base=h-6;
+    // baseline
+    ctx.strokeStyle="rgba(33,28,22,.12)";ctx.beginPath();ctx.moveTo(pad,base);ctx.lineTo(w-pad,base);ctx.stroke();
+    opList.forEach((o,i)=>{
+      const x=pad+ ((o.t-t0)/total)*usable;
+      const intensity=Math.min(1,(o.ins.length+o.d)/4);
+      if(o.paste){
+        const bh=8+intensity*22; ctx.fillStyle=amber;
+        ctx.fillRect(x-1.5,base-bh,3,bh);
+      }else{
+        const bh=5+intensity*20;
+        ctx.strokeStyle=(playIndex>=0&&i<=playIndex)?blue:blueTick;
+        ctx.lineWidth=playIndex>=0&&i<=playIndex?1.4:1;
+        ctx.beginPath();ctx.moveTo(x,base);ctx.lineTo(x,base-bh);ctx.stroke();
+      }
+    });
+    if(playIndex>=0 && opList.length){
+      const o=opList[Math.min(playIndex,opList.length-1)];
+      const x=pad+((o.t-t0)/total)*usable;
+      ctx.strokeStyle=blue;ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(x,2);ctx.lineTo(x,h-2);ctx.stroke();
+    }
+  }
+
+  // ---------- report ----------
+  function buildReport(opList){
+    const final=reconstruct(opList,opList.length-1).text;
+    const chars=final.length;
+    let pastedChars=0,pasteEvents=0,typed=0;
+    opList.forEach(o=>{ if(o.paste){pastedChars+=o.ins.length;pasteEvents++;} else {typed+=o.ins.length;} });
+    const dur=opList.length?opList[opList.length-1].t:0;
+    const pastedPct=chars?Math.round(pastedChars/chars*100):0;
+    return {final,chars,pastedChars,pasteEvents,typed,dur,pastedPct,edits:opList.length};
+  }
+
+  function renderReport(r){
+    const rows=[
+      ["Writing time",fmt(r.dur),""],
+      ["Edits recorded",r.edits,""],
+      ["Final length",r.chars,"chars"],
+      ["Pasted",r.pastedPct,"%"],
+    ];
+    $("#report").innerHTML=rows.map(([k,v,u])=>
+      `<div class="stat"><p class="k">${k}</p><p class="v">${v}<small>${u}</small></p></div>`).join("");
+  }
+
+  // ---------- replay engine ----------
+  let replayOps=[], replayTimers=[], replayPlaying=false, replayIndex=-1, loopTimer=null;
+  let speed=1; // playback rate; travels with the share link
+  let isRecipient=false;
+  function setSpeedUI(s){
+    speed=s;
+    document.querySelectorAll("#speeds button").forEach(x=>x.classList.toggle("on",+x.dataset.s===s));
+  }
+  function escapeHtml(s){return s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+  function renderRead(upto,showCaret){
+    const {text,mask}=reconstruct(replayOps,upto);
+    let html="",run="",runPasted=mask.length?mask[0]:0;
+    for(let i=0;i<text.length;i++){
+      if(mask[i]!==runPasted){
+        html+=runPasted?`<span class="pasted">${escapeHtml(run)}</span>`:escapeHtml(run);
+        run="";runPasted=mask[i];
+      }
+      run+=text[i];
+    }
+    if(run) html+=runPasted?`<span class="pasted">${escapeHtml(run)}</span>`:escapeHtml(run);
+    if(showCaret) html+=`<span class="caret">▏</span>`;
+    $("#readArea").innerHTML=html||'<span style="color:var(--ink-faint)">—</span>';
+  }
+  function clearReplayTimers(){replayTimers.forEach(clearTimeout);replayTimers=[];}
+  function pctOf(index){
+    if(!replayOps.length)return 0;
+    const t0=replayOps[0].t, span=Math.max(replayOps[replayOps.length-1].t-t0,1);
+    return index<0?0:((replayOps[Math.min(index,replayOps.length-1)].t-t0)/span)*100;
+  }
+  function setProgress(index){ // instant jump (seeks, resets)
+    const f=$("#timelineFill");
+    f.style.transitionDuration="0ms";f.style.width=pctOf(index)+"%";
+  }
+  function glideTo(index,durMs){ // continuous motion toward the next keystroke
+    const f=$("#timelineFill");
+    f.getBoundingClientRect(); // flush so the new duration applies from current position
+    f.style.transitionDuration=Math.max(durMs,16)+"ms";f.style.width=pctOf(index)+"%";
+  }
+  function seekTo(index){
+    stopReplay();
+    replayIndex=index;
+    renderRead(index,false);
+    drawPulse($("#replayPulse"),replayOps,index);
+    setProgress(index);
+    $("#replayClock").textContent=fmt(index>=0?replayOps[Math.min(index,replayOps.length-1)].t:0);
+  }
+  function stopReplay(){replayPlaying=false;clearReplayTimers();clearTimeout(loopTimer);}
+  function playReplay(){
+    if(replayIndex>=replayOps.length-1){replayIndex=-1;setProgress(-1);}
+    replayPlaying=true;
+    const reduce=window.matchMedia("(prefers-reduced-motion:reduce)").matches;
+    let cum=0,prevT=replayIndex>=0?replayOps[replayIndex].t:0;
+    const fireAt=[];
+    for(let i=replayIndex+1;i<replayOps.length;i++){
+      const gap=Math.max(16,Math.min(reduce?40:850,replayOps[i].t-prevT));
+      cum+=(reduce?30:gap)/speed;prevT=replayOps[i].t;
+      fireAt[i]=cum;
+      const idx=i;
+      replayTimers.push(setTimeout(()=>{
+        replayIndex=idx;
+        renderRead(idx,true);
+        drawPulse($("#replayPulse"),replayOps,idx);
+        $("#replayClock").textContent=fmt(replayOps[idx].t);
+        if(idx<replayOps.length-1)glideTo(idx+1,fireAt[idx+1]-fireAt[idx]);
+        if(idx===replayOps.length-1){
+          stopReplay();renderRead(idx,false);
+          // hold on the finished message, then loop
+          loopTimer=setTimeout(()=>{replayIndex=-1;playReplay();},1600);
+        }
+      },cum));
+    }
+    // begin gliding toward the first scheduled keystroke immediately
+    const first=replayIndex+1;
+    if(first<replayOps.length)glideTo(first,fireAt[first]);
+  }
+  // lock the reading surface to the finished message's height so the card
+  // doesn't grow and shift the page while the replay types it out; waits
+  // until the share view is actually visible (offsetHeight is 0 before then)
+  function lockReadHeight(){
+    const ra=$("#readArea");
+    if(ra.offsetParent===null){requestAnimationFrame(lockReadHeight);return;}
+    const idx=replayIndex;
+    ra.style.minHeight="";
+    renderRead(replayOps.length-1,false);
+    ra.style.minHeight=ra.offsetHeight+"px";
+    renderRead(idx,false);
+  }
+  function loadReplay(opList,autoplay=true){
+    replayOps=opList;stopReplay();
+    replayIndex=-1;
+    renderRead(-1,false);
+    requestAnimationFrame(lockReadHeight);
+    setProgress(-1);
+    requestAnimationFrame(()=>drawPulse($("#replayPulse"),replayOps,-1));
+    $("#replayClock").textContent="0:00";
+    // autoplay the writing, then loop (recipients start via the proof modal instead)
+    if(autoplay)loopTimer=setTimeout(()=>playReplay(),500);
+  }
+
+  // ---------- encode / decode share payload ----------
+  function b64urlFromBytes(bytes){let s="";for(const b of bytes)s+=String.fromCharCode(b);
+    return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");}
+  function bytesFromB64url(str){str=str.replace(/-/g,"+").replace(/_/g,"/");
+    const bin=atob(str);const out=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out;}
+  // compress with deflate-raw (no gzip header → ~18 bytes smaller per link).
+  // token prefix records the format: d=deflate-raw, g=gzip (legacy), r=uncompressed.
+  async function compress(str){
+    const data=new TextEncoder().encode(str);
+    if(typeof CompressionStream==="undefined") return {fmt:"r",bytes:data};
+    const cs=new CompressionStream("deflate-raw");const w=cs.writable.getWriter();w.write(data);w.close();
+    const buf=await new Response(cs.readable).arrayBuffer();return {fmt:"d",bytes:new Uint8Array(buf)};
+  }
+  async function decompress(bytes,fmt){
+    if(fmt==="r"||typeof DecompressionStream==="undefined") return new TextDecoder().decode(bytes);
+    const ds=new DecompressionStream(fmt==="g"?"gzip":"deflate-raw");
+    const w=ds.writable.getWriter();w.write(bytes);w.close();
+    const buf=await new Response(ds.readable).arrayBuffer();return new TextDecoder().decode(new Uint8Array(buf));
+  }
+  async function encodeOps(opList,spd){
+    // v3: timestamps (10ms-rounded) AND positions both delta-encoded, with trailing
+    // zero fields dropped. Sequential typing makes both deltas near-constant, which
+    // compresses to almost nothing — roughly halves the link vs absolute encoding.
+    let pt=0,pp=0;
+    const o=opList.map(op=>{
+      const rt=Math.round(op.t/10), dt=rt-pt; pt=rt;
+      const dp=op.p-pp; pp=op.p;
+      if(op.paste) return [dt,dp,op.d,op.ins,1];   // [t,p,del,ins,paste]
+      if(op.d)     return [dt,dp,op.d,op.ins];      // [t,p,del,ins]
+      return [dt,dp,op.ins];                        // [t,p,ins]  (pure insert)
+    });
+    const {fmt,bytes}=await compress(JSON.stringify({v:3,s:spd,o}));
+    return fmt+b64urlFromBytes(bytes);
+  }
+  async function decodeOps(token){
+    const fmt=token[0];const bytes=bytesFromB64url(token.slice(1));
+    const json=await decompress(bytes,fmt);const p=JSON.parse(json);
+    if(p.v===3){
+      let t=0,pos=0;
+      return {ops:p.o.map(a=>{
+        t+=a[0]; pos+=a[1];
+        const d=a.length===3?0:a[2];
+        const ins=a.length===3?a[2]:a[3];
+        const paste=a.length===5?!!a[4]:false;
+        return {t:t*10,p:pos,d,ins,paste};
+      }),s:p.s||1};
+    }
+    if(p.v===2){
+      let t=0;
+      return {ops:p.o.map(a=>{t+=a[0];return {t:t*10,p:a[1],d:a[2],ins:a[3],paste:!!a[4]};}),s:p.s||1};
+    }
+    // legacy v1: absolute-ms timestamps, absolute positions
+    return {ops:p.o.map(a=>({t:a[0],p:a[1],d:a[2],ins:a[3],paste:!!a[4]})),s:p.s||1};
+  }
+
+  // ---------- share actions ----------
+  let shareUrl="",shareText="";
+  async function prepareShare(opList){
+    const token=await encodeOps(opList,speed);
+    const base=location.origin+location.pathname;
+    shareUrl=base+"#m="+token;
+    shareText=reconstruct(opList,opList.length-1).text;
+  }
+  function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");
+    clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),1900);}
+
+  $("#copyBtn").addEventListener("click",async()=>{
+    try{await navigator.clipboard.writeText(shareUrl);toast("Link copied");}
+    catch{const t=document.createElement("textarea");t.value=shareUrl;document.body.appendChild(t);
+      t.select();try{document.execCommand("copy");toast("Link copied");}catch{toast("Copy failed");}
+      document.body.removeChild(t);}
+  });
+  $("#copyMsgBtn").addEventListener("click",async()=>{
+    // the message itself, with the proof link underneath
+    const plain=shareText+"\n\nWritten Not by a Bot\n"+shareUrl;
+    const html=escapeHtml(shareText).replace(/\n/g,"<br>")+
+      '<br><br><a href="'+shareUrl+'">Written Not by a Bot</a>';
+    try{
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/plain":new Blob([plain],{type:"text/plain"}),
+        "text/html":new Blob([html],{type:"text/html"})
+      })]);
+      toast("Message + link copied");
+    }catch{
+      try{await navigator.clipboard.writeText(plain);toast("Message + link copied");}
+      catch{const t=document.createElement("textarea");t.value=plain;document.body.appendChild(t);
+        t.select();try{document.execCommand("copy");toast("Copied");}catch{toast("Copy failed");}
+        document.body.removeChild(t);}
+    }
+  });
+  // playback speed — the sender's choice is baked into the share link
+  document.querySelectorAll("#speeds button").forEach(b=>{
+    b.addEventListener("click",()=>{
+      setSpeedUI(+b.dataset.s);
+      if(replayOps.length){const at=replayIndex;stopReplay();replayIndex=at;playReplay();}
+      if(replayOps.length&&!isRecipient)prepareShare(replayOps);
+    });
+  });
+
+  // ---------- flow wiring ----------
+  $("#startBtn").addEventListener("click",()=>{show("write");beginSession();});
+  $("#restartBtn").addEventListener("click",()=>beginSession());
+  $("#saveBtn").addEventListener("click",async()=>{
+    clearInterval(clockTimer);
+    $("#editorCard").classList.remove("recording");
+    const snapshot=ops.slice();
+    $("#copyBtn").style.display="";$("#copyMsgBtn").style.display="";
+    renderReport(buildReport(snapshot));
+    loadReplay(snapshot);
+    await prepareShare(snapshot);
+    show("share");
+  });
+  // scrub by clicking/dragging the replay pulse or the timeline; playback resumes on release
+  function seekFromX(clientX,el){
+    if(!replayOps.length)return;
+    const rect=el.getBoundingClientRect();
+    const x=Math.min(1,Math.max(0,(clientX-rect.left)/rect.width));
+    const t0=replayOps[0].t;
+    const span=(replayOps[replayOps.length-1].t-t0)||1;
+    const target=t0+x*span;
+    let idx=0;while(idx<replayOps.length-1 && replayOps[idx+1].t<=target)idx++;
+    seekTo(idx);
+  }
+  // proof modal → dismiss and roll the replay
+  function dismissProofModal(){
+    $("#proofModal").hidden=true;
+    replayIndex=-1;playReplay();
+  }
+  $("#modalBtn").addEventListener("click",dismissProofModal);
+  $("#proofModal").addEventListener("click",e=>{
+    if(e.target===$("#proofModal"))dismissProofModal();
+  });
+
+  let dragEl=null;
+  $("#replayPulse").addEventListener("pointerdown",e=>{dragEl=$("#replayPulse");seekFromX(e.clientX,dragEl);});
+  $("#timeline").addEventListener("pointerdown",e=>{dragEl=$("#timeline");seekFromX(e.clientX,dragEl);});
+  window.addEventListener("pointermove",e=>{if(dragEl)seekFromX(e.clientX,dragEl);});
+  window.addEventListener("pointerup",()=>{if(dragEl){dragEl=null;if(replayOps.length)playReplay();}});
+
+  let resizeT;window.addEventListener("resize",()=>{clearTimeout(resizeT);resizeT=setTimeout(()=>{
+    if(views.write.classList.contains("active"))drawLive();
+    if(views.share.classList.contains("active"))drawPulse($("#replayPulse"),replayOps,replayIndex);
+  },120);});
+
+  // ---------- shared-link entry point ----------
+  async function init(){
+    const m=location.hash.match(/#m=(.+)$/);
+    if(m){
+      try{
+        const dec=await decodeOps(m[1]);
+        const opList=dec.ops;
+        isRecipient=true;
+        setSpeedUI(dec.s||1);
+        $("#copyBtn").style.display="none";$("#copyMsgBtn").style.display="none";
+        renderReport(buildReport(opList));
+        loadReplay(opList,false);
+        $("#proofModal").hidden=false;
+        show("share");
+        return;
+      }catch(err){
+        toast("That link couldn’t be read");
+      }
+    }
+    show("intro");
+  }
+  init();
+})();
+</script>
+</body>
+</html>
