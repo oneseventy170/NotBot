@@ -675,8 +675,11 @@
       document.body.removeChild(t);}
   });
   $("#emailBtn").addEventListener("click",()=>{
-    // opens the mail client with the message, then the proof link
-    const body=encodeURIComponent(shareText+"\n\n\nWritten Not by a Bot\n"+shareUrl);
+    // opens the mail client with the message, then the proof link.
+    // mailto bodies need CRLF (\r\n) — many clients ignore lone \n and collapse the lines.
+    const nl="\r\n";
+    const msg=shareText.replace(/\r?\n/g,nl);
+    const body=encodeURIComponent(msg+nl+nl+nl+"Written Not by a Bot"+nl+shareUrl);
     const subject=encodeURIComponent("A message I wrote");
     window.location.href=`mailto:?subject=${subject}&body=${body}`;
   });
