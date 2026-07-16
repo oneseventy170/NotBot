@@ -679,7 +679,8 @@
     // mailto bodies need CRLF (\r\n) — many clients ignore lone \n and collapse the lines.
     const nl="\r\n";
     const msg=shareText.replace(/\r?\n/g,nl);
-    const body=encodeURIComponent(msg+nl+nl+nl+"Written Not by a Bot"+nl+shareUrl);
+    // visible divider survives even mail clients that collapse blank lines
+    const body=encodeURIComponent(msg+nl+nl+"—————"+nl+nl+"Written Not by a Bot"+nl+shareUrl);
     const subject=encodeURIComponent("A message I wrote");
     window.location.href=`mailto:?subject=${subject}&body=${body}`;
   });
