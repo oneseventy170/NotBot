@@ -676,11 +676,11 @@
   });
   $("#emailBtn").addEventListener("click",()=>{
     // opens the mail client with the message, then the proof link.
-    // mailto bodies need CRLF (\r\n) — many clients ignore lone \n and collapse the lines.
-    const nl="\r\n";
-    const msg=shareText.replace(/\r?\n/g,nl);
-    // visible divider survives even mail clients that collapse blank lines
-    const body=encodeURIComponent(msg+nl+nl+"—————"+nl+nl+"Written Not by a Bot"+nl+shareUrl);
+    // U+2028 (line separator) is used for breaks: composers like Notion Mail
+    // collapse \r\n / \n into spaces, but honor U+2028 as a hard line break.
+    const br="\u2028";
+    const msg=shareText.replace(/\r?\n/g,br);
+    const body=encodeURIComponent(msg+br+br+"Written Not by a Bot"+br+shareUrl);
     const subject=encodeURIComponent("A message I wrote");
     window.location.href=`mailto:?subject=${subject}&body=${body}`;
   });
